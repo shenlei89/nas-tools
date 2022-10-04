@@ -7,14 +7,14 @@ from lxml import etree
 from requests.utils import dict_from_cookiejar
 
 import log
+from app.db import SqlHelper
+from app.message import Message
 from config import Config
 from app.downloader.downloader import Downloader
 from app.searcher import Searcher
-from app.media.doubanv2api.doubanapi import DoubanApi
-from app.media.media import Media
-from app.media.meta.metainfo import MetaInfo
-from app.utils.http_utils import RequestUtils
-from app.db.sqls import get_douban_search_state, insert_douban_media_state
+from app.media.doubanv2api import DoubanApi
+from app.media import Media, MetaInfo
+from app.utils import RequestUtils
 from app.utils.types import MediaType, SearchType
 from web.backend.subscribe import add_rss_subscribe
 
@@ -27,6 +27,7 @@ class DouBan:
     media = None
     downloader = None
     doubanapi = None
+    message = None
     __users = []
     __days = 0
     __interval = None
@@ -39,6 +40,7 @@ class DouBan:
         self.downloader = Downloader()
         self.media = Media()
         self.doubanapi = DoubanApi()
+        self.message = Message()
         self.init_config()
 
     def init_config(self):
@@ -207,7 +209,8 @@ class DouBan:
             meta_info.type = media_type
             meta_info.overview = douban_info.get("intro")
             meta_info.poster_path = douban_info.get("cover_url")
-            meta_info.vote_average = douban_info.get("rating", {}).get("value") or ""
+            rating = douban_info.get("rating", {}) or {}
+            meta_info.vote_average = rating.get("value") or ""
             if meta_info not in media_list:
                 media_list.append(meta_info)
             # 随机休眠
@@ -219,6 +222,7 @@ class DouBan:
         同步豆瓣数据
         """
         if not self.__interval:
+            log.info("【DOUBAN】豆瓣配置：同步间隔未配置或配置不正确")
             return
         try:
             lock.acquire()
@@ -228,13 +232,11 @@ class DouBan:
             # 开始检索
             if self.__auto_search:
                 # 需要检索
-                if len(medias) == 0:
-                    return
                 for media in medias:
                     if not media:
                         continue
                     # 查询数据库状态，已经加入RSS的不处理
-                    search_state = get_douban_search_state(media.get_name(), media.year)
+                    search_state = SqlHelper.get_douban_search_state(media.get_name(), media.year)
                     if not search_state or search_state[0][0] == "NEW":
                         if not self.__auto_rss:
                             # 不需要自动加订阅，则直接搜索
@@ -256,7 +258,7 @@ class DouBan:
                             if exist_flag:
                                 # 更新为已下载状态
                                 log.info("【DOUBAN】%s 已存在" % media.get_name())
-                                insert_douban_media_state(media, "DOWNLOADED")
+                                SqlHelper.insert_douban_media_state(media, "DOWNLOADED")
                                 continue
                             # 开始检索
                             search_result, no_exists, search_count, download_count = self.searcher.search_one_media(
@@ -265,7 +267,7 @@ class DouBan:
                                 no_exists=no_exists)
                             if search_result:
                                 # 下载全了更新为已下载，没下载全的下次同步再次搜索
-                                insert_douban_media_state(media, "DOWNLOADED")
+                                SqlHelper.insert_douban_media_state(media, "DOWNLOADED")
                         else:
                             # 需要加订阅，则由订阅去检索
                             log.info("【DOUBAN】%s %s 更新到%s订阅中..." % (media.get_name(), media.year, media.type.value))
@@ -277,10 +279,12 @@ class DouBan:
                             if code != 0:
                                 log.error("【DOUBAN】%s 添加订阅失败：%s" % (media.get_name(), msg))
                             else:
+                                # 发送订阅消息
+                                self.message.send_rss_success_message(in_from=SearchType.DB, media_info=media)
                                 # 插入为已RSS状态
-                                insert_douban_media_state(media, "RSS")
+                                SqlHelper.insert_douban_media_state(media, "RSS")
                     else:
-                        log.debug("【DOUBAN】%s %s 已处理过" % (media.get_name(), media.year))
+                        log.info("【DOUBAN】%s %s 已处理过" % (media.get_name(), media.year))
             else:
                 # 不需要检索
                 if self.__auto_rss:
@@ -296,8 +300,10 @@ class DouBan:
                         if code != 0:
                             log.error("【DOUBAN】%s 添加订阅失败：%s" % (media.get_name(), msg))
                         else:
+                            # 发送订阅消息
+                            self.message.send_rss_success_message(in_from=SearchType.DB, media_info=media)
                             # 插入为已RSS状态
-                            insert_douban_media_state(media, "RSS")
+                            SqlHelper.insert_douban_media_state(media, "RSS")
             log.info("【DOUBAN】豆瓣数据同步完成")
         finally:
             lock.release()
@@ -339,7 +345,8 @@ class DouBan:
             meta_info.douban_id = item.get("id")
             meta_info.overview = item.get("card_subtitle") or ""
             meta_info.poster_path = item.get("cover_url").split('?')[0]
-            meta_info.vote_average = item.get("rating", {}).get("value")
+            rating = item.get("rating", {}) or {}
+            meta_info.vote_average = rating.get("value")
             if meta_info not in ret_medias:
                 ret_medias.append(meta_info)
 

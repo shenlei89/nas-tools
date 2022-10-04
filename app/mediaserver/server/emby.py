@@ -4,10 +4,8 @@ import re
 import log
 from config import Config
 from app.mediaserver.server.server import IMediaServer
-from app.media.meta.metabase import MetaBase
 from app.utils.commons import singleton
-from app.utils.http_utils import RequestUtils
-from app.utils.system_utils import SystemUtils
+from app.utils import RequestUtils, SystemUtils
 from app.utils.types import MediaType
 
 
@@ -15,7 +13,8 @@ from app.utils.types import MediaType
 class Emby(IMediaServer):
     __apikey = None
     __host = None
-    __librarys = []
+    __user = None
+    __libraries = []
 
     def __init__(self):
         self.init_config()
@@ -26,13 +25,14 @@ class Emby(IMediaServer):
         if emby:
             self.__host = emby.get('host')
             if self.__host:
-                if not self.__host.startswith('http://') and not self.__host.startswith('https://'):
+                if not self.__host.startswith('http'):
                     self.__host = "http://" + self.__host
                 if not self.__host.endswith('/'):
                     self.__host = self.__host + "/"
             self.__apikey = emby.get('api_key')
             if self.__host and self.__apikey:
-                self.__librarys = self.__get_emby_librarys()
+                self.__libraries = self.__get_emby_librarys()
+                self.__user = self.get_admin_user()
 
     def get_status(self):
         """
@@ -57,6 +57,26 @@ class Emby(IMediaServer):
         except Exception as e:
             log.error("【EMBY】连接Library/SelectableMediaFolders 出错：" + str(e))
             return []
+
+    def get_admin_user(self):
+        """
+        获得管理员用户
+        """
+        if not self.__host or not self.__apikey:
+            return None
+        req_url = "%sUsers?api_key=%s" % (self.__host, self.__apikey)
+        try:
+            res = RequestUtils().get_res(req_url)
+            if res:
+                users = res.json()
+                for user in users:
+                    if user.get("Policy", {}).get("IsAdministrator"):
+                        return user.get("Id")
+            else:
+                log.error("【JELLYFIN】Users 未获取到返回数据")
+        except Exception as e:
+            log.error("【JELLYFIN】连接Users出错：" + str(e))
+        return None
 
     def get_user_count(self):
         """
@@ -182,11 +202,13 @@ class Emby(IMediaServer):
             return None
         return []
 
-    def __get_emby_tv_episodes(self, title, year=None, season=None):
+    def __get_emby_tv_episodes(self, title, year, tmdb_id=None, season=None):
         """
         根据标题和年份和季，返回Emby中的剧集列表
         :param title: 标题
         :param year: 年份，可以为空，为空时不按年份过滤
+        :param tmdb_id: TMDBID
+        :param season: 季
         :return: 集号的列表
         """
         if not self.__host or not self.__apikey:
@@ -197,6 +219,11 @@ class Emby(IMediaServer):
             return None
         if not item_id:
             return []
+        # 验证tmdbid是否相同
+        item_tmdbid = self.get_iteminfo(item_id).get("ProviderIds", {}).get("Tmdb")
+        if tmdb_id and item_tmdbid:
+            if str(tmdb_id) != str(item_tmdbid):
+                return []
         # /Shows/{Id}/Episodes 查集的信息
         if not season:
             season = 1
@@ -215,7 +242,7 @@ class Emby(IMediaServer):
             return None
         return []
 
-    def get_no_exists_episodes(self, meta_info: MetaBase, season, total_num):
+    def get_no_exists_episodes(self, meta_info, season, total_num):
         """
         根据标题、年份、季、总集数，查询Emby中缺少哪几集
         :param meta_info: 已识别的需要查询的媒体信息
@@ -225,7 +252,7 @@ class Emby(IMediaServer):
         """
         if not self.__host or not self.__apikey:
             return None
-        exists_episodes = self.__get_emby_tv_episodes(meta_info.title, meta_info.year, season)
+        exists_episodes = self.__get_emby_tv_episodes(meta_info.title, meta_info.year, meta_info.tmdb_id, season)
         if not isinstance(exists_episodes, list):
             return None
         total_episodes = [episode for episode in range(1, total_num + 1)]
@@ -265,10 +292,8 @@ class Emby(IMediaServer):
         req_url = "%semby/Items/%s/Refresh?Recursive=true&api_key=%s" % (self.__host, item_id, self.__apikey)
         try:
             res = RequestUtils().post_res(req_url)
-            if res and res.status_code == 200:
+            if res:
                 return True
-            elif res:
-                log.info(f"【EMBY】刷新媒体库对象 {item_id} 失败，错误码：{res.status_code}，错误原因：{res.reason}")
             else:
                 log.info(f"【EMBY】刷新媒体库对象 {item_id} 失败，无法连接Emby！")
         except Exception as e:
@@ -285,10 +310,8 @@ class Emby(IMediaServer):
         req_url = "%semby/Library/Refresh?api_key=%s" % (self.__host, self.__apikey)
         try:
             res = RequestUtils().post_res(req_url)
-            if res and res.status_code == 200:
+            if res:
                 return True
-            elif res:
-                log.info(f"【EMBY】刷新媒体库返回码：{res.status_code}，返回内容：{res.reason}")
             else:
                 log.info(f"【EMBY】刷新媒体库失败，无法连接Emby！")
         except Exception as e:
@@ -338,12 +361,15 @@ class Emby(IMediaServer):
                 # 已存在，不用刷新
                 return None
         # 查找需要刷新的媒体库ID
-        for library in self.__librarys:
+        for library in self.__libraries:
             # 找同级路径最多的媒体库（要求容器内映射路径与实际一致）
             max_equal_path_id = None
             max_path_len = 0
             equal_path_num = 0
             for folder in library.get("SubFolders"):
+                path_list = re.split(pattern='/+|\\\\+', string=folder.get("Path"))
+                if item.get("category") != path_list[-1]:
+                    continue
                 try:
                     path_len = len(os.path.commonpath([item.get("target_path"), folder.get("Path")]))
                     if path_len >= max_path_len:
@@ -361,3 +387,66 @@ class Emby(IMediaServer):
                     return library.get("Id")
         # 刷新根目录
         return "/"
+
+    def get_libraries(self):
+        """
+        获取媒体服务器所有媒体库列表
+        """
+        if self.__host and self.__apikey:
+            self.__libraries = self.__get_emby_librarys()
+        libraries = []
+        for library in self.__libraries:
+            libraries.append({"id": library.get("Id"), "name": library.get("Name")})
+        return libraries
+
+    def get_iteminfo(self, itemid):
+        """
+        获取单个项目详情
+        """
+        if not itemid:
+            return {}
+        if not self.__host or not self.__apikey:
+            return {}
+        req_url = "%semby/Users/%s/Items/%s?api_key=%s" % (self.__host, self.__user, itemid, self.__apikey)
+        try:
+            res = RequestUtils().get_res(req_url)
+            if res and res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(str(e))
+            return {}
+
+    def get_items(self, parent):
+        """
+        获取媒体服务器所有媒体库列表
+        """
+        if not parent:
+            yield {}
+        if not self.__host or not self.__apikey:
+            yield {}
+        req_url = "%semby/Users/%s/Items?ParentId=%s&api_key=%s" % (self.__host, self.__user, parent, self.__apikey)
+        try:
+            res = RequestUtils().get_res(req_url)
+            if res and res.status_code == 200:
+                results = res.json().get("Items") or []
+                for result in results:
+                    if not result:
+                        continue
+                    if result.get("Type") in ["Movie", "Series"]:
+                        item_info = self.get_iteminfo(result.get("Id"))
+                        yield {"id": result.get("Id"),
+                               "library": item_info.get("ParentId"),
+                               "type": item_info.get("Type"),
+                               "title": item_info.get("Name"),
+                               "originalTitle": item_info.get("OriginalTitle"),
+                               "year": item_info.get("ProductionYear"),
+                               "tmdbid": item_info.get("ProviderIds", {}).get("Tmdb"),
+                               "imdbid": item_info.get("ProviderIds", {}).get("Imdb"),
+                               "path": item_info.get("Path"),
+                               "json": str(item_info)}
+                    elif "Folder" in result.get("Type"):
+                        for item in self.get_items(parent=result.get('Id')):
+                            yield item
+        except Exception as e:
+            log.error("【EMBY】连接Users/Items出错：" + str(e))
+        yield {}

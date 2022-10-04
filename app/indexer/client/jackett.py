@@ -2,8 +2,7 @@ import requests
 
 from config import Config
 from app.indexer.indexer import IIndexer
-from app.utils.http_utils import RequestUtils
-from app.indexer.indexer_conf import IndexerConf
+from app.utils import RequestUtils, IndexerConf
 
 
 class Jackett(IIndexer):
@@ -18,7 +17,7 @@ class Jackett(IIndexer):
             self._password = jackett.get('password')
             self.host = jackett.get('host')
             if self.host:
-                if not self.host.startswith('http://') and not self.host.startswith('https://'):
+                if not self.host.startswith('http'):
                     self.host = "http://" + self.host
                 if not self.host.endswith('/'):
                     self.host = self.host + "/"
@@ -28,6 +27,8 @@ class Jackett(IIndexer):
         检查连通性
         :return: True、False
         """
+        if not self.api_key or not self.host:
+            return False
         return True if self.get_indexers() else False
 
     def get_indexers(self):
@@ -49,7 +50,9 @@ class Jackett(IIndexer):
                 return []
             return [IndexerConf({"id": v["id"],
                                  "name": v["name"],
-                                 "domain": f'{self.host}api/v2.0/indexers/{v["id"]}/results/torznab/'})
+                                 "domain": f'{self.host}api/v2.0/indexers/{v["id"]}/results/torznab/',
+                                 "public": True if v['type'] == 'public' else False,
+                                 "buildin": False})
                     for v in ret.json()]
         except Exception as e2:
             print(str(e2))

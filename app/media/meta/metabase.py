@@ -1,14 +1,9 @@
 import re
-from functools import lru_cache
-
 import cn2an
-
-import log
-from config import FANART_TV_API_URL, FANART_MOVIE_API_URL, ANIME_GENREIDS, Config, DEFAULT_TMDB_IMAGE, \
-    TMDB_IMAGE_W500_URL
+from app.media.fanart import Fanart
+from config import ANIME_GENREIDS, DEFAULT_TMDB_IMAGE, TMDB_IMAGE_W500_URL
 from app.media.category import Category
-from app.utils.http_utils import RequestUtils
-from app.utils.string_utils import StringUtils
+from app.utils import StringUtils
 from app.utils.types import MediaType
 
 
@@ -48,6 +43,8 @@ class MetaBase(object):
     resource_type = None
     # 识别的分辨率
     resource_pix = None
+    # 识别的制作组/字幕组
+    resource_team = None
     # 视频编码
     video_encode = None
     # 音频编码
@@ -56,6 +53,10 @@ class MetaBase(object):
     category = None
     # TMDB ID
     tmdb_id = 0
+    # IMDB ID
+    imdb_id = ""
+    # TVDB ID
+    tvdb_id = 0
     # 豆瓣 ID
     douban_id = 0
     # 媒体标题
@@ -69,8 +70,8 @@ class MetaBase(object):
     # 封面图片
     backdrop_path = None
     poster_path = None
-    fanart_image = None
-    fanart_flag = False
+    fanart_backdrop = None
+    fanart_poster = None
     # 评分
     vote_average = 0
     # 描述
@@ -78,19 +79,37 @@ class MetaBase(object):
     # TMDB 的其它信息
     tmdb_info = {}
     # 种子附加信息
+    # 站点名称
     site = None
+    # 站点优先级
     site_order = 0
+    # 种子链接
     enclosure = None
+    # 资源优先级
     res_order = 0
+    # 种子大小
     size = 0
+    # 做种者
     seeders = 0
+    # 下载者
     peers = 0
+    # 种子描述
     description = None
+    # 详情页面
     page_url = None
+    # 上传因子
     upload_volume_factor = None
+    # 下载因子
     download_volume_factor = None
+    # HR
     hit_and_run = None
+    # 订阅ID
     rssid = None
+    # 保存目录
+    save_dir = None
+    # 识别辅助
+    ignored_words = None
+    replaced_words = None
     # 副标题解析
     _subtitle_flag = False
     _subtitle_season_re = r"[第\s]+([0-9一二三四五六七八九十S\-]+)\s*季"
@@ -99,11 +118,10 @@ class MetaBase(object):
     _subtitle_episode_all_re = r"([0-9一二三四五六七八九十]+)\s*集全|全\s*([0-9一二三四五六七八九十]+)\s*集"
 
     def __init__(self, title, subtitle=None, fileflag=False):
+        self.category_handler = Category()
+        self.fanart = Fanart()
         if not title:
             return
-        config = Config()
-        self.proxies = config.get_proxies()
-        self.category_handler = Category()
         self.org_string = title
         self.subtitle = subtitle
         self.fileflag = fileflag
@@ -279,6 +297,13 @@ class MetaBase(object):
             return self.resource_pix
         else:
             return ""
+    
+    # 返回发布组/字幕组字符串
+    def get_resource_team_string(self):
+        if self.resource_team:
+            return self.resource_team
+        else:
+            return ""
 
     # 返回视频编码
     def get_video_encode_string(self):
@@ -289,11 +314,14 @@ class MetaBase(object):
         return self.audio_encode or ""
 
     # 返回背景图片地址
-    def get_backdrop_path(self, default=True):
-        if not self.fanart_image:
-            self.__refresh_fanart_image()
-        if self.fanart_image:
-            return self.fanart_image
+    def get_backdrop_image(self, default=True):
+        if self.fanart_backdrop:
+            return self.fanart_backdrop
+        else:
+            self.fanart_backdrop = self.fanart.get_backdrop(media_type=self.type,
+                                                            queryid=self.tmdb_id if self.type == MediaType.MOVIE else self.tvdb_id)
+        if self.fanart_backdrop:
+            return self.fanart_backdrop
         elif self.backdrop_path:
             return self.backdrop_path
         else:
@@ -301,10 +329,13 @@ class MetaBase(object):
 
     # 返回消息图片地址
     def get_message_image(self):
-        if not self.fanart_image:
-            self.__refresh_fanart_image()
-        if self.fanart_image:
-            return self.fanart_image
+        if self.fanart_backdrop:
+            return self.fanart_backdrop
+        else:
+            self.fanart_backdrop = self.fanart.get_backdrop(media_type=self.type,
+                                                            queryid=self.tmdb_id if self.type == MediaType.MOVIE else self.tvdb_id)
+        if self.fanart_backdrop:
+            return self.fanart_backdrop
         elif self.backdrop_path:
             return self.backdrop_path
         elif self.poster_path:
@@ -314,7 +345,12 @@ class MetaBase(object):
 
     # 返回海报图片地址
     def get_poster_image(self):
-        return self.poster_path if self.poster_path else ""
+        if self.fanart_poster:
+            return self.fanart_poster
+        else:
+            self.fanart_poster = self.fanart.get_poster(media_type=self.type,
+                                                        queryid=self.tmdb_id if self.type == MediaType.MOVIE else self.tvdb_id)
+        return self.fanart_poster if self.fanart_poster else self.poster_path or ""
 
     # 返回促销信息
     def get_volume_factor_string(self):
@@ -377,8 +413,11 @@ class MetaBase(object):
         self.tmdb_id = info.get('id')
         if not self.tmdb_id:
             return
+        if info.get("external_ids"):
+            self.tvdb_id = info.get("external_ids", {}).get("tvdb_id", 0)
+            self.imdb_id = info.get("external_ids", {}).get("imdb_id", "")
         self.tmdb_info = info
-        self.vote_average = info.get('vote_average')
+        self.vote_average = round(info.get('vote_average'), 1)
         self.overview = info.get('overview')
         if self.type == MediaType.MOVIE:
             self.title = info.get('title')
@@ -403,20 +442,6 @@ class MetaBase(object):
             'poster_path') else ""
         self.backdrop_path = TMDB_IMAGE_W500_URL % info.get('backdrop_path') if info.get(
             'backdrop_path') else ""
-
-    # 刷新Fanart图片
-    def __refresh_fanart_image(self):
-        if not self.tmdb_id:
-            return
-        if self.fanart_image or self.fanart_flag:
-            return
-        self.fanart_image = self.__get_fanart_image(search_type=self.type, tmdbid=self.tmdb_id)
-        self.fanart_flag = True
-
-    # 获取Fanart图片
-    def get_fanart_image(self):
-        self.__refresh_fanart_image()
-        return self.fanart_image
 
     # 整合种了信息
     def set_torrent_info(self,
@@ -459,34 +484,6 @@ class MetaBase(object):
             self.rssid = rssid
         if hit_and_run is not None:
             self.hit_and_run = hit_and_run
-
-    # 获取消息媒体图片
-    # 增加cache，优化资源检索时性能
-    @classmethod
-    @lru_cache(maxsize=128)
-    def __get_fanart_image(cls, search_type, tmdbid, default=None):
-        if not search_type:
-            return ""
-        if tmdbid:
-            if search_type == MediaType.MOVIE:
-                image_url = FANART_MOVIE_API_URL % tmdbid
-            else:
-                image_url = FANART_TV_API_URL % tmdbid
-            try:
-                ret = RequestUtils(proxies=cls.proxies, timeout=5).get_res(image_url)
-                if ret:
-                    moviethumbs = ret.json().get('moviethumb')
-                    if moviethumbs:
-                        moviethumb = moviethumbs[0].get('url')
-                        if moviethumb:
-                            # 有则返回FanArt的图片
-                            return moviethumb
-            except Exception as e2:
-                log.console(str(e2))
-        if default:
-            # 返回一个默认图片
-            return default
-        return ""
 
     # 判断电视剧是否为动漫
     def __get_tmdb_type(self, info):
@@ -536,7 +533,10 @@ class MetaBase(object):
                 if self.begin_season is None and isinstance(begin_season, int):
                     self.begin_season = begin_season
                     self.total_seasons = 1
-                if self.begin_season is not None and self.end_season is None and isinstance(end_season, int):
+                if self.begin_season is not None \
+                        and self.end_season is None \
+                        and isinstance(end_season, int) \
+                        and end_season != self.begin_season:
                     self.end_season = end_season
                     self.total_seasons = (self.end_season - self.begin_season) + 1
                 self.type = MediaType.TV
@@ -564,7 +564,10 @@ class MetaBase(object):
                 if self.begin_episode is None and isinstance(begin_episode, int):
                     self.begin_episode = begin_episode
                     self.total_episodes = 1
-                if self.begin_episode is not None and self.end_episode is None and isinstance(end_episode, int):
+                if self.begin_episode is not None \
+                        and self.end_episode is None \
+                        and isinstance(end_episode, int) \
+                        and end_episode != self.begin_episode:
                     self.end_episode = end_episode
                     self.total_episodes = (self.end_episode - self.begin_episode) + 1
                 self.type = MediaType.TV
@@ -575,6 +578,7 @@ class MetaBase(object):
                 self.begin_episode = None
                 self.end_episode = None
                 self.total_episodes = 0
+                self.type = MediaType.TV
             # 全x季 x季全
             season_all_str = re.search(r"%s" % self._subtitle_season_all_re, title_text, re.IGNORECASE)
             if season_all_str:
@@ -589,4 +593,5 @@ class MetaBase(object):
                         return
                     self.begin_season = 1
                     self.end_season = self.total_seasons
+                    self.type = MediaType.TV
                     self._subtitle_flag = True

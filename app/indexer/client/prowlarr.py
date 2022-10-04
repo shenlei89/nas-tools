@@ -1,7 +1,6 @@
 from config import Config
 from app.indexer.indexer import IIndexer
-from app.utils.http_utils import RequestUtils
-from app.indexer.indexer_conf import IndexerConf
+from app.utils import RequestUtils, IndexerConf
 
 
 class Prowlarr(IIndexer):
@@ -13,10 +12,11 @@ class Prowlarr(IIndexer):
         if prowlarr:
             self.api_key = prowlarr.get('api_key')
             self.host = prowlarr.get('host')
-            if not self.host.startswith('http://') and not self.host.startswith('https://'):
-                self.host = "http://" + self.host
-            if not self.host.endswith('/'):
-                self.host = self.host + "/"
+            if self.host:
+                if not self.host.startswith('http'):
+                    self.host = "http://" + self.host
+                if not self.host.endswith('/'):
+                    self.host = self.host + "/"
 
     def get_status(self):
         """
@@ -25,11 +25,7 @@ class Prowlarr(IIndexer):
         """
         if not self.api_key or not self.host:
             return False
-        api_url = "%sapi/v1/search?apikey=%s&Query=%s" % (self.host, self.api_key, "ASDFGHJKL")
-        res = RequestUtils().get_res(api_url)
-        if res and res.status_code == 200:
-            return True
-        return False
+        return True if self.get_indexers() else False
 
     def get_indexers(self):
         """
@@ -47,7 +43,8 @@ class Prowlarr(IIndexer):
         indexers = ret.json().get("indexers", [])
         return [IndexerConf({"id": v["indexerId"],
                              "name": v["indexerName"],
-                             "domain": f'{self.host}{v["indexerId"]}/api'})
+                             "domain": f'{self.host}{v["indexerId"]}/api',
+                             "buildin": False})
                 for v in indexers]
 
     def search(self, *kwargs):

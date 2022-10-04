@@ -3,17 +3,19 @@ from plexapi.myplex import MyPlexAccount
 import log
 from config import Config
 from app.mediaserver.server.server import IMediaServer
-from app.media.meta.metabase import MetaBase
 from app.utils.commons import singleton
+from plexapi.server import PlexServer
 
 
 @singleton
 class Plex(IMediaServer):
     __host = None
+    __token = None
     __username = None
     __password = None
     __servername = None
     __plex = None
+    __libraries = []
 
     def __init__(self):
         self.init_config()
@@ -23,15 +25,22 @@ class Plex(IMediaServer):
         plex = config.get_config('plex')
         if plex:
             self.__host = plex.get('host')
+            self.__token = plex.get('token')
             if self.__host:
-                if not self.__host.startswith('http://') and not self.__host.startswith('https://'):
+                if not self.__host.startswith('http'):
                     self.__host = "http://" + self.__host
                 if not self.__host.endswith('/'):
                     self.__host = self.__host + "/"
             self.__username = plex.get('username')
             self.__password = plex.get('password')
             self.__servername = plex.get('servername')
-            if self.__username and self.__password and self.__servername:
+            if self.__host and self.__token:
+                try:
+                    self.__plex = PlexServer(self.__host, self.__token)
+                except Exception as e:
+                    self.__plex = None
+                    log.error("【PLEX】Plex服务器连接失败：%s" % str(e))
+            elif self.__username and self.__password and self.__servername:
                 try:
                     self.__plex = MyPlexAccount(self.__username, self.__password).resource(self.__servername).connect()
                 except Exception as e:
@@ -104,7 +113,7 @@ class Plex(IMediaServer):
         return ret_movies
 
     # 根据标题、年份、季、总集数，查询Plex中缺少哪几集
-    def get_no_exists_episodes(self, meta_info: MetaBase, season, total_num):
+    def get_no_exists_episodes(self, meta_info, season, total_num):
         """
         根据标题、年份、季、总集数，查询Plex中缺少哪几集
         :param meta_info: 已识别的需要查询的媒体信息
@@ -134,10 +143,54 @@ class Plex(IMediaServer):
         """
         通知Plex刷新整个媒体库
         """
+        if not self.__plex:
+            return False
         return self.__plex.library.update()
 
     def refresh_library_by_items(self, items):
         """
         按类型、名称、年份来刷新媒体库，未找到对应的API，直接刷整库
         """
+        if not self.__plex:
+            return False
         return self.__plex.library.update()
+
+    def get_libraries(self):
+        """
+        获取媒体服务器所有媒体库列表
+        """
+        if not self.__plex:
+            return []
+        try:
+            self.__libraries = self.__plex.library.sections()
+        except Exception as err:
+            print(err)
+            return []
+        libraries = []
+        for library in self.__libraries:
+            libraries.append({"id": library.key, "name": library.title})
+        return libraries
+
+    def get_items(self, parent):
+        """
+        获取媒体服务器所有媒体库列表
+        """
+        if not parent:
+            yield {}
+        if not self.__plex:
+            yield {}
+        try:
+            section = self.__plex.library.sectionByID(parent)
+            if section:
+                for item in section.all():
+                    if not item:
+                        continue
+                    yield {"id": item.key,
+                           "library": item.librarySectionID,
+                           "type": item.type,
+                           "title": item.title,
+                           "year": item.year,
+                           "json": str(item.__dict__)}
+        except Exception as err:
+            print(err)
+        yield {}

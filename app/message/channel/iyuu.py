@@ -3,7 +3,7 @@ from urllib.parse import urlencode
 import log
 from config import Config
 from app.message.channel.channel import IMessageChannel
-from app.utils.http_utils import RequestUtils
+from app.utils import RequestUtils
 
 
 class IyuuMsg(IMessageChannel):
@@ -38,11 +38,10 @@ class IyuuMsg(IMessageChannel):
         """
         if not title and not text:
             return False, "标题和内容不能同时为空"
-        values = {"text": title, "desp": text}
+        if not self._token:
+            return False, "参数未配置"
         try:
-            if not self._token:
-                return False, "参数未配置"
-            sc_url = "http://iyuu.cn/%s.send?%s" % (self._token, urlencode(values))
+            sc_url = "http://iyuu.cn/%s.send?%s" % (self._token, urlencode({"text": title, "desp": text}))
             res = RequestUtils().get_res(sc_url)
             if res:
                 ret_json = res.json()

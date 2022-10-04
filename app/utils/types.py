@@ -27,6 +27,7 @@ class SearchType(Enum):
     RSS = "RSS订阅"
     OT = "手动下载"
     TG = "Telegram搜索"
+    API = "第三方API请求"
 
 
 class RmtMode(Enum):
@@ -34,8 +35,8 @@ class RmtMode(Enum):
     SOFTLINK = "软链接"
     COPY = "复制"
     MOVE = "移动"
-    RCLONECOPY = "rclone复制"
-    RCLONE = "rclone移动"
+    RCLONECOPY = "Rclone复制"
+    RCLONE = "Rclone移动"
 
 
 class MatchMode(Enum):
@@ -58,3 +59,28 @@ class MediaServerType(Enum):
     JELLYFIN = "Jellyfin"
     EMBY = "Emby"
     PLEX = "Plex"
+
+
+class BrushDeleteType(Enum):
+    NOTDELETE = "不删除"
+    SEEDTIME = "做种时间"
+    RATIO = "分享率"
+    UPLOADSIZE = "上传量"
+    DLTIME = "下载耗时"
+    AVGUPSPEED = "平均上传速度"
+
+
+class SystemDictType(Enum):
+    BrushMessageSwitch = "刷流消息开关"
+    BrushForceUpSwitch = "刷流强制做种开关"
+
+
+# 转移模式
+RMT_MODES = {
+    "copy": RmtMode.COPY,
+    "link": RmtMode.LINK,
+    "softlink": RmtMode.SOFTLINK,
+    "move": RmtMode.MOVE,
+    "rclone": RmtMode.RCLONE,
+    "rclonecopy": RmtMode.RCLONECOPY
+}

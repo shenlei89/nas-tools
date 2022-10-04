@@ -109,7 +109,7 @@ class Transmission(IDownloadClient):
         if not tid or not tag:
             return
         try:
-            self.trc.change_torrent(labels=[tag], ids=int(tid))
+            self.trc.change_torrent(labels=tag, ids=int(tid))
         except Exception as err:
             print(str(err))
 
@@ -120,7 +120,7 @@ class Transmission(IDownloadClient):
         for torrent in torrents:
             # 3.0版本以下的Transmission没有labels
             if not hasattr(torrent, "labels"):
-                log.warn(f"【TR】当前transmission版本可能过低，无labels属性，请安装3.0以上版本！")
+                log.error(f"【TR】当前transmission版本可能过低，无labels属性，请安装3.0以上版本！")
                 break
 
             if torrent.labels and "已整理" in torrent.labels:
@@ -254,3 +254,31 @@ class Transmission(IDownloadClient):
         except Exception as err:
             print(str(err))
             return []
+
+    def set_uploadspeed_limit(self, ids, limit):
+        """
+        设置上传限速，单位 KB/sec
+        """
+        if not self.trc:
+            return
+        if not ids or not limit:
+            return
+        if not isinstance(ids, list):
+            ids = int(ids)
+        else:
+            ids = [int(x) for x in ids if str(x).isdigit()]
+        self.trc.change_torrent(ids, uploadLimit=int(limit))
+
+    def set_downloadspeed_limit(self, ids, limit):
+        """
+        设置下载限速，单位 KB/sec
+        """
+        if not self.trc:
+            return
+        if not ids or not limit:
+            return
+        if not isinstance(ids, list):
+            ids = int(ids)
+        else:
+            ids = [int(x) for x in ids if str(x).isdigit()]
+        self.trc.change_torrent(ids, downloadLimit=int(limit))

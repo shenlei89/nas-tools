@@ -6,7 +6,7 @@ from pythonopensubtitles.opensubtitles import OpenSubtitles
 import log
 from config import Config
 from app.utils.commons import singleton
-from app.utils.http_utils import RequestUtils
+from app.utils import RequestUtils
 from app.utils.types import MediaType
 
 
@@ -42,10 +42,11 @@ class Subtitle:
             elif self.__server == "chinesesubfinder":
                 self.__api_key = subtitle.get("chinesesubfinder", {}).get("api_key")
                 self.__host = subtitle.get("chinesesubfinder", {}).get('host')
-                if not self.__host.startswith('http://') and not self.__host.startswith('https://'):
-                    self.__host = "http://" + self.__host
-                if not self.__host.endswith('/'):
-                    self.__host = self.__host + "/"
+                if self.__host:
+                    if not self.__host.startswith('http'):
+                        self.__host = "http://" + self.__host
+                    if not self.__host.endswith('/'):
+                        self.__host = self.__host + "/"
                 self.__local_path = subtitle.get("chinesesubfinder", {}).get("local_path")
                 self.__remote_path = subtitle.get("chinesesubfinder", {}).get("remote_path")
 

@@ -2,17 +2,14 @@ import random
 import re
 from functools import lru_cache
 from time import sleep
-from urllib import parse
+from urllib.parse import quote
 
 import bencode
-import cn2an
 from lxml import etree
 
 from config import TORRENT_SEARCH_PARAMS
-from app.sites.siteconf import RSS_SITE_GRAP_CONF
-from app.media.meta.metabase import MetaBase
-from app.utils.http_utils import RequestUtils
-from app.utils.types import MediaType
+from app.sites import SiteConf
+from app.utils import RequestUtils
 
 
 class TorrentAttr:
@@ -65,64 +62,22 @@ class Torrent:
         return True
 
     @staticmethod
-    def get_keyword_from_string(content):
-        """
-        从检索关键字中拆分中年份、季、集、类型
-        """
-        if not content:
-            return None, None, None, None, None
-        # 去掉查询中的电影或电视剧关键字
-        if re.search(r'^电视剧|\s+电视剧|^动漫|\s+动漫', content):
-            mtype = MediaType.TV
-        else:
-            mtype = None
-        content = re.sub(r'^电影|^电视剧|^动漫|\s+电影|\s+电视剧|\s+动漫', '', content).strip()
-        # 稍微切一下剧集吧
-        season_num = None
-        episode_num = None
-        year = None
-        season_re = re.search(r"第\s*([0-9一二三四五六七八九十]+)\s*季", content, re.IGNORECASE)
-        if season_re:
-            mtype = MediaType.TV
-            season_num = int(cn2an.cn2an(season_re.group(1), mode='smart'))
-        episode_re = re.search(r"第\s*([0-9一二三四五六七八九十]+)\s*集", content, re.IGNORECASE)
-        if episode_re:
-            mtype = MediaType.TV
-            episode_num = int(cn2an.cn2an(episode_re.group(1), mode='smart'))
-            if episode_num and not season_num:
-                season_num = 1
-        year_re = re.search(r"[\s(]+(\d{4})[\s)]*", content)
-        if year_re:
-            year = year_re.group(1)
-        key_word = re.sub(r'第\s*[0-9一二三四五六七八九十]+\s*季|第\s*[0-9一二三四五六七八九十]+\s*集|[\s(]+(\d{4})[\s)]*', '',
-                          content,
-                          flags=re.IGNORECASE).strip()
-        if key_word:
-            key_word = re.sub(r'\s+', ' ', key_word)
-        if not key_word:
-            key_word = year
-
-        return mtype, key_word, season_num, episode_num, year, content
-
-    @staticmethod
     @lru_cache(maxsize=128)
-    def check_torrent_attr(torrent_url, cookie) -> TorrentAttr:
+    def check_torrent_attr(torrent_url, cookie, ua=None) -> TorrentAttr:
         """
         检验种子是否免费，当前做种人数
         :param torrent_url: 种子的详情页面
         :param cookie: 站点的Cookie
+        :param ua: 站点的ua
         :return: 种子属性，包含FREE 2XFREE HR PEER_COUNT等属性
         """
         ret_attr = TorrentAttr()
         if not torrent_url:
             return ret_attr
-        url_host = parse.urlparse(torrent_url).netloc
-        if not url_host:
-            return ret_attr
-        xpath_strs = RSS_SITE_GRAP_CONF.get(url_host)
+        xpath_strs = SiteConf().get_grapsite_conf(torrent_url)
         if not xpath_strs:
             return ret_attr
-        res = RequestUtils(cookies=cookie).get_res(url=torrent_url)
+        res = RequestUtils(cookies=cookie, headers=ua).get_res(url=torrent_url)
         if res and res.status_code == 200:
             res.encoding = res.apparent_encoding
             html_text = res.text
@@ -156,18 +111,19 @@ class Torrent:
         return ret_attr
 
     @staticmethod
-    def get_torrent_content(url, cookie=None):
+    def get_torrent_content(url, cookie=None, ua=None):
         """
         把种子下载到本地，返回种子内容
         :param url: 种子链接
         :param cookie: 站点Cookie
+        :param ua: 站点UserAgent
         """
         if not url:
             return None, "URL为空"
+        if url.startswith("magnet:"):
+            return url, "磁力链接"
         try:
-            if url.startswith("magnet:"):
-                return url, "磁力链接"
-            req = RequestUtils(cookies=cookie).get_res(url=url)
+            req = RequestUtils(headers=ua, cookies=cookie).get_res(url=url)
             if req and req.status_code == 200:
                 if not req.content:
                     return None, "未下载到种子数据"
@@ -176,14 +132,14 @@ class Torrent:
                     return None, "不正确的种子文件"
                 return req.content, ""
             elif not req:
-                return url, "无法打开链接"
+                return url, "无法打开链接：%s" % url
             else:
-                return None, "状态码：%s" % req.status_code
+                return None, "下载种子出错，状态码：%s" % req.status_code
         except Exception as err:
-            return None, "%s" % str(err)
+            return None, "下载种子文件出现异常：%s，可能站点Cookie已过期或触发了站点首次种子下载" % str(err)
 
     @staticmethod
-    def check_torrent_filter(meta_info: MetaBase, filter_args, uploadvolumefactor=None, downloadvolumefactor=None):
+    def check_torrent_filter(meta_info, filter_args, uploadvolumefactor=None, downloadvolumefactor=None):
         """
         对种子进行过滤
         :param meta_info: 名称识别后的MetaBase对象
@@ -203,6 +159,12 @@ class Torrent:
                 return False
             if restype_re and not re.search(r"%s" % restype_re, meta_info.resource_pix, re.IGNORECASE):
                 return False
+        if filter_args.get("team"):
+            restype_re = filter_args.get("team")
+            if not meta_info.resource_team:
+                return False
+            if restype_re and not re.search(r"%s" % restype_re, meta_info.resource_team, re.IGNORECASE):
+                return False
         if filter_args.get("sp_state"):
             ul_factor, dl_factor = filter_args.get("sp_state").split()
             if uploadvolumefactor and ul_factor not in ("*", str(uploadvolumefactor)):
@@ -218,7 +180,7 @@ class Torrent:
     @staticmethod
     def get_rss_note_item(desc):
         """
-        解析订阅的NOTE字段，从中获取订阅站点、搜索站点、是否洗版、订阅质量、订阅分辨率、过滤规则等信息
+        解析订阅的NOTE字段，从中获取订阅站点、搜索站点、是否洗版、订阅质量、订阅分辨率、订阅制作组/字幕组、过滤规则等信息
         DESC字段组成：RSS站点#搜索站点#是否洗版(Y/N)#过滤条件，站点用|分隔多个站点，过滤条件用@分隔多个条件
         :param desc: RSS订阅DESC字段的值
         :return: 订阅站点、搜索站点、是否洗版、过滤字典
@@ -230,6 +192,7 @@ class Torrent:
         over_edition = False
         rss_restype = None
         rss_pix = None
+        rss_team = None
         rss_rule = None
         notes = str(desc).split('#')
         # 订阅站点
@@ -256,5 +219,54 @@ class Torrent:
                     rss_pix = filters[1]
                 if len(filters) > 2:
                     rss_rule = filters[2]
+                if len(filters) > 3:
+                    rss_team = filters[3]
 
-        return rss_sites, search_sites, over_edition, {"restype": rss_restype, "pix": rss_pix, "rule": rss_rule}
+        return rss_sites, search_sites, over_edition, {"restype": rss_restype,
+                                                       "pix": rss_pix,
+                                                       "rule": rss_rule,
+                                                       "team": rss_team}
+
+    @staticmethod
+    def parse_download_url(page_url, xpath, cookie=None, ua=None):
+        """
+        从详情页面中解析中下载链接
+        :param page_url: 详情页面地址
+        :param xpath: 解析XPATH
+        :param cookie: 站点Cookie
+        :param ua: 站点User-Agent
+        """
+        if not page_url or not xpath:
+            return ""
+        try:
+            req = RequestUtils(headers=ua, cookies=cookie).get_res(url=page_url)
+            if req and req.status_code == 200:
+                if not req.text:
+                    return None
+                html = etree.HTML(req.text)
+                urls = html.xpath(xpath)
+                if urls:
+                    return str(urls[0])
+        except Exception as err:
+            print(str(err))
+        return None
+
+    @staticmethod
+    def convert_hash_to_magnet(hash_text, title):
+        """
+        根据hash值，转换为磁力链，自动添加tracker
+        :param hash_text: 种子Hash值
+        :param title: 种子标题
+        """
+        if not hash_text or not title:
+            return None
+        hash_text = re.search(r'[0-9a-z]+', hash_text, re.IGNORECASE)
+        if not hash_text:
+            return None
+        hash_text = hash_text.group(0)
+        return f'magnet:?xt=urn:btih:{hash_text}&dn={quote(title)}&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80' \
+               '&tr=udp%3A%2F%2Fopentor.org%3A2710' \
+               '&tr=udp%3A%2F%2Ftracker.ccc.de%3A80' \
+               '&tr=udp%3A%2F%2Ftracker.blackunicorn.xyz%3A6969' \
+               '&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969' \
+               '&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969'

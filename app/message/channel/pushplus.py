@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 import log
 from config import Config
 from app.message.channel.channel import IMessageChannel
-from app.utils.http_utils import RequestUtils
+from app.utils import RequestUtils
 
 
 class PushPlus(IMessageChannel):
@@ -45,6 +45,8 @@ class PushPlus(IMessageChannel):
         """
         if not title and not text:
             return False, "标题和内容不能同时为空"
+        if not text:
+            text = "无"
         if not self._token or not self._channel:
             return False, "参数未配置"
         try:

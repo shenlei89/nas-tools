@@ -1,8 +1,7 @@
 import re
 
-from app.media.meta.metabase import MetaBase
+from app.db import SqlHelper
 from app.utils.commons import singleton
-from app.db.sqls import get_config_filter_rule, get_config_filter_group
 from app.utils.types import MediaType
 
 
@@ -15,8 +14,8 @@ class FilterRule:
         self.init_config()
 
     def init_config(self):
-        self._groups = get_config_filter_group()
-        self._rules = get_config_filter_rule()
+        self._groups = SqlHelper.get_config_filter_group()
+        self._rules = SqlHelper.get_config_filter_rule()
 
     def get_rule_groups(self, groupid=None, default=False):
         """
@@ -77,7 +76,7 @@ class FilterRule:
             return ret_rules[0] if ret_rules else {}
         return ret_rules
 
-    def check_rules(self, meta_info: MetaBase, rolegroup=None):
+    def check_rules(self, meta_info, rolegroup=None):
         """
         检查种子是否匹配站点过滤规则：排除规则、包含规则，优先规则
         :param meta_info: 识别的信息
@@ -93,7 +92,7 @@ class FilterRule:
         if not rolegroup:
             rolegroup = self.get_rule_groups(default=True)
             if not rolegroup:
-                return True, 0, ""
+                return True, 0, "未配置过滤规则"
         else:
             rolegroup = self.get_rule_groups(groupid=rolegroup)
         filters = self.get_rules(groupid=rolegroup.get("id"))
@@ -134,7 +133,7 @@ class FilterRule:
                     rule_match = False
             # 大小
             sizes = filter_info.get('size')
-            if sizes and rule_match and meta_info.size and meta_info.type == MediaType.MOVIE:
+            if sizes and rule_match and meta_info.size:
                 if sizes.find(',') != -1:
                     sizes = sizes.split(',')
                     if sizes[0].isdigit():
@@ -151,8 +150,13 @@ class FilterRule:
                         end_size = int(sizes.strip())
                     else:
                         end_size = 0
-                if not begin_size * 1024 ** 3 <= int(meta_info.size) <= end_size * 1024 ** 3:
-                    rule_match = False
+                if meta_info.type == MediaType.MOVIE:
+                    if not begin_size * 1024 ** 3 <= int(meta_info.size) <= end_size * 1024 ** 3:
+                        rule_match = False
+                else:
+                    if meta_info.total_episodes \
+                            and not begin_size * 1024 ** 3 <= int(meta_info.size)/int(meta_info.total_episodes) <= end_size * 1024 ** 3:
+                        rule_match = False
 
             # 促销
             free = filter_info.get("free")
@@ -167,7 +171,7 @@ class FilterRule:
             else:
                 group_match = False
         if not group_match:
-            return False, 0, ""
+            return False, 0, rolegroup.get("name")
         return True, order_seq, rolegroup.get("name")
 
     def is_rule_free(self, rolegroup=None):

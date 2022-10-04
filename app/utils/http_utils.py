@@ -1,7 +1,7 @@
 import requests
 import urllib3
 
-from config import Config
+from config import Config, DEFAULT_UA
 
 
 class RequestUtils:
@@ -26,7 +26,7 @@ class RequestUtils:
                                   "User-Agent": user_agent}
             else:
                 self.__headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"}
+                                  "User-Agent": DEFAULT_UA}
         if cookies:
             if isinstance(cookies, str):
                 self.__cookies = self.cookie_parse(cookies)
@@ -64,14 +64,16 @@ class RequestUtils:
         except requests.exceptions.RequestException:
             return None
 
-    def get_res(self, url, params=None):
+    def get_res(self, url, params=None, allow_redirects=True):
         try:
             if self.__session:
                 return self.__session.get(url, params=params, verify=False, headers=self.__headers,
-                                          proxies=self.__proxies, cookies=self.__cookies, timeout=self.__timeout)
+                                          proxies=self.__proxies, cookies=self.__cookies, timeout=self.__timeout,
+                                          allow_redirects=allow_redirects)
             else:
                 return requests.get(url, params=params, verify=False, headers=self.__headers,
-                                    proxies=self.__proxies, cookies=self.__cookies, timeout=self.__timeout)
+                                    proxies=self.__proxies, cookies=self.__cookies, timeout=self.__timeout,
+                                    allow_redirects=allow_redirects)
         except requests.exceptions.RequestException:
             return None
 
@@ -90,6 +92,8 @@ class RequestUtils:
 
     @staticmethod
     def cookie_parse(cookies_str):
+        if not cookies_str:
+            return {}
         cookie_dict = {}
         cookies = cookies_str.split(';')
         for cookie in cookies:
